@@ -279,6 +279,10 @@ impl Cache {
         self.vector.trim(&mut self.atlas); // TODO: Concurrency
     }
 
+    pub fn clear_old_textures(&mut self) {
+        self.atlas.clear_old_textures();
+    }
+
     #[cfg(feature = "image")]
     pub fn receive(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]

@@ -108,6 +108,10 @@ impl Atlas {
         &self.texture_bind_group
     }
 
+    pub fn clear_old_textures(&mut self) {
+        self.old_textures.clear();
+    }
+
     pub fn upload(
         &mut self,
         device: &wgpu::Device,
