@@ -27,6 +27,7 @@ pub struct Atlas {
     texture_bind_group: Arc<wgpu::BindGroup>,
     texture_layout: wgpu::BindGroupLayout,
     layers: Vec<Layer>,
+    old_textures: Vec<wgpu::Texture>,
 }
 
 impl Atlas {
@@ -99,6 +100,7 @@ impl Atlas {
             texture_bind_group: Arc::new(texture_bind_group),
             texture_layout,
             layers,
+            old_textures: Vec::new(),
         }
     }
 
@@ -514,7 +516,9 @@ impl Atlas {
             );
         }
 
-        self.texture = new_texture;
+        let old_texture = std::mem::replace(&mut self.texture, new_texture);
+        self.old_textures.push(old_texture);
+
         self.texture_view = self.texture.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2Array),
             ..Default::default()
