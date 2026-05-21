@@ -86,7 +86,7 @@ pub struct Renderer {
 
     // TODO: Centralize all the image feature handling
     #[cfg(any(feature = "svg", feature = "image"))]
-    image_cache: std::cell::RefCell<image::Cache>,
+    image_cache: std::cell::RefCell<Option<image::Cache>>,
 
     staging_belt: wgpu::util::StagingBelt,
 }
@@ -107,7 +107,7 @@ impl Renderer {
             image: image::State::new(),
 
             #[cfg(any(feature = "svg", feature = "image"))]
-            image_cache: std::cell::RefCell::new(engine.create_image_cache()),
+            image_cache: std::cell::RefCell::new(None),
 
             // TODO: Resize belt smartly (?)
             // It would be great if the `StagingBelt` API exposed methods
@@ -151,7 +151,7 @@ impl Renderer {
         #[cfg(any(feature = "svg", feature = "image"))]
         {
             self.image.trim();
-            self.image_cache.borrow_mut().trim();
+            self.image_cache().trim();
         }
 
         encoder
@@ -365,7 +365,7 @@ impl Renderer {
                     &self.engine.device,
                     &mut self.staging_belt,
                     encoder,
-                    &mut self.image_cache.borrow_mut(),
+                    &mut self.image_cache(),
                     &layer.images,
                     viewport.projection(),
                     scale_factor,
@@ -662,6 +662,15 @@ impl Renderer {
     }
 }
 
+#[cfg(any(feature = "svg", feature = "image"))]
+impl Renderer {
+    fn image_cache(&self) -> std::cell::RefMut<'_, image::Cache> {
+        std::cell::RefMut::map(self.image_cache.borrow_mut(), |cache| {
+            cache.get_or_insert_with(|| self.engine.create_image_cache())
+        })
+    }
+}
+
 impl core::Renderer for Renderer {
     fn start_layer(&mut self, bounds: Rectangle) {
         self.layers.push_clip(bounds);
@@ -690,9 +699,7 @@ impl core::Renderer for Renderer {
         _callback: impl FnOnce(Result<core::image::Allocation, core::image::Error>) + Send + 'static,
     ) {
         #[cfg(feature = "image")]
-        self.image_cache
-            .get_mut()
-            .allocate_image(_handle, _callback);
+        self.image_cache().allocate_image(_handle, _callback);
     }
 
     fn hint(&mut self, scale_factor: f32) {
@@ -705,7 +712,7 @@ impl core::Renderer for Renderer {
 
     fn tick(&mut self) {
         #[cfg(feature = "image")]
-        self.image_cache.get_mut().receive();
+        self.image_cache().receive();
     }
 
     fn reset(&mut self, new_bounds: Rectangle) {
@@ -785,13 +792,12 @@ impl core::image::Renderer for Renderer {
         &self,
         handle: &Self::Handle,
     ) -> Result<core::image::Allocation, core::image::Error> {
-        self.image_cache
-            .borrow_mut()
+        self.image_cache()
             .load_image(&self.engine.device, &self.engine.queue, handle)
     }
 
     fn measure_image(&self, handle: &Self::Handle) -> Option<core::Size<u32>> {
-        self.image_cache.borrow_mut().measure_image(handle)
+        self.image_cache().measure_image(handle)
     }
 
     fn draw_image(&mut self, image: core::Image, bounds: Rectangle, clip_bounds: Rectangle) {
@@ -803,7 +809,7 @@ impl core::image::Renderer for Renderer {
 #[cfg(feature = "svg")]
 impl core::svg::Renderer for Renderer {
     fn measure_svg(&self, handle: &core::svg::Handle) -> core::Size<u32> {
-        self.image_cache.borrow_mut().measure_svg(handle)
+        self.image_cache().measure_svg(handle)
     }
 
     fn draw_svg(&mut self, svg: core::Svg, bounds: Rectangle, clip_bounds: Rectangle) {
