@@ -168,6 +168,12 @@ impl Renderer {
 
         self.staging_belt.finish();
         let submission = self.engine.queue.submit([encoder.finish()]);
+
+        #[cfg(any(feature = "svg", feature = "image"))]
+        if let Some(cache) = self.image_cache.get_mut() {
+            cache.clear_old_textures();
+        }
+
         self.staging_belt.recall();
         submission
     }
