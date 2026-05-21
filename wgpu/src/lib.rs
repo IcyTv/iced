@@ -151,7 +151,7 @@ impl Renderer {
         #[cfg(any(feature = "svg", feature = "image"))]
         {
             self.image.trim();
-            self.image_cache().trim();
+            self.image_cache_mut().trim();
         }
 
         encoder
@@ -360,12 +360,23 @@ impl Renderer {
             if !layer.images.is_empty() {
                 let prepare_span = debug::prepare(debug::Primitive::Image);
 
+                if self.image_cache.get_mut().is_none() {
+                    let cache = self.engine.create_image_cache();
+                    *self.image_cache.get_mut() = Some(cache);
+                }
+
+                let image_cache = self
+                    .image_cache
+                    .get_mut()
+                    .as_mut()
+                    .expect("Initialize image cache");
+
                 self.image.prepare(
                     &self.engine.image_pipeline,
                     &self.engine.device,
                     &mut self.staging_belt,
                     encoder,
-                    &mut self.image_cache(),
+                    image_cache,
                     &layer.images,
                     viewport.projection(),
                     scale_factor,
@@ -669,6 +680,18 @@ impl Renderer {
             cache.get_or_insert_with(|| self.engine.create_image_cache())
         })
     }
+
+    fn image_cache_mut(&mut self) -> &mut image::Cache {
+        if self.image_cache.get_mut().is_none() {
+            let cache = self.engine.create_image_cache();
+            *self.image_cache.get_mut() = Some(cache);
+        }
+
+        self.image_cache
+            .get_mut()
+            .as_mut()
+            .expect("Initialize image cache")
+    }
 }
 
 impl core::Renderer for Renderer {
@@ -699,7 +722,7 @@ impl core::Renderer for Renderer {
         _callback: impl FnOnce(Result<core::image::Allocation, core::image::Error>) + Send + 'static,
     ) {
         #[cfg(feature = "image")]
-        self.image_cache().allocate_image(_handle, _callback);
+        self.image_cache_mut().allocate_image(_handle, _callback);
     }
 
     fn hint(&mut self, scale_factor: f32) {
@@ -712,7 +735,7 @@ impl core::Renderer for Renderer {
 
     fn tick(&mut self) {
         #[cfg(feature = "image")]
-        self.image_cache().receive();
+        self.image_cache_mut().receive();
     }
 
     fn reset(&mut self, new_bounds: Rectangle) {
