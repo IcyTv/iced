@@ -560,6 +560,11 @@ where
         Self::build(self.root, bounds, Cache { state: self.state }, renderer)
     }
 
+    /// Returns the size of the root layout.
+    pub fn size(&self) -> Size {
+        self.base.size()
+    }
+
     /// Extract the [`Cache`] of the [`UserInterface`], consuming it in the
     /// process.
     pub fn into_cache(self) -> Cache {
