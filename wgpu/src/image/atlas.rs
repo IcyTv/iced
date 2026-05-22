@@ -47,13 +47,10 @@ impl Atlas {
     ) -> Self {
         let size = size.min(MAX_SIZE);
 
-        let layers = match backend {
-            // On the GL backend we start with 2 layers, to help wgpu figure
-            // out that this texture is `GL_TEXTURE_2D_ARRAY` rather than `GL_TEXTURE_2D`
-            // https://github.com/gfx-rs/wgpu/blob/004e3efe84a320d9331371ed31fa50baa2414911/wgpu-hal/src/gles/mod.rs#L371
-            wgpu::Backend::Gl => vec![Layer::Empty, Layer::Empty],
-            _ => vec![Layer::Empty],
-        };
+        // We always create at least 2 layers because the atlas is bound as a
+        // D2Array texture view. Some backends reject a 1-layer texture viewed
+        // as an array texture.
+        let layers = vec![Layer::Empty, Layer::Empty];
 
         let extent = wgpu::Extent3d {
             width: size,
@@ -80,6 +77,8 @@ impl Atlas {
 
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2Array),
+            base_array_layer: 0,
+            array_layer_count: Some(layers.len() as u32),
             ..Default::default()
         });
 
@@ -525,6 +524,8 @@ impl Atlas {
 
         self.texture_view = self.texture.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2Array),
+            base_array_layer: 0,
+            array_layer_count: Some(depth_or_array_layers),
             ..Default::default()
         });
 
