@@ -45,7 +45,8 @@ impl Atlas {
         texture_layout: wgpu::BindGroupLayout,
         size: u32,
     ) -> Self {
-        let size = size.min(MAX_SIZE);
+        let max_device_size = device.limits().max_texture_dimension_2d;
+        let size = size.min(MAX_SIZE).min(max_device_size).max(1);
 
         // We always create at least 2 layers because the atlas is bound as a
         // D2Array texture view. Some backends reject a 1-layer texture viewed
