@@ -51,17 +51,12 @@ impl Cache {
     #[cfg(feature = "image")]
     pub fn allocate_image(
         &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
         handle: &core::image::Handle,
         callback: impl FnOnce(Result<core::image::Allocation, core::image::Error>) + Send + 'static,
     ) {
         use crate::image::raster::Memory;
-
-        let callback = Box::new(callback);
-
-        if let Some(callbacks) = self.raster.pending.get_mut(&handle.id()) {
-            callbacks.push(callback);
-            return;
-        }
 
         if let Some(Memory::Device {
             allocation, entry, ..
@@ -83,10 +78,11 @@ impl Cache {
             return;
         }
 
-        let _ = self.raster.pending.insert(handle.id(), vec![callback]);
+        if !self.raster.cache.contains(handle) {
+            self.raster.cache.insert(handle, Memory::load(handle));
+        }
 
-        #[cfg(not(target_arch = "wasm32"))]
-        self.worker.load(handle, true);
+        callback(self.load_image(device, queue, handle));
     }
 
     #[cfg(feature = "image")]

@@ -732,7 +732,8 @@ impl core::Renderer for Renderer {
         _callback: impl FnOnce(Result<core::image::Allocation, core::image::Error>) + Send + 'static,
     ) {
         #[cfg(feature = "image")]
-        self.image_cache_mut().allocate_image(_handle, _callback);
+        self.image_cache_mut()
+            .allocate_image(&self.engine.device, &self.engine.queue, _handle, _callback);
     }
 
     fn hint(&mut self, scale_factor: f32) {
