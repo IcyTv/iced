@@ -54,8 +54,9 @@ impl Atlas {
         // We always create at least 2 layers because the atlas is bound as a
         // D2Array texture view. Some backends reject a 1-layer texture viewed
         // as an array texture.
-        let layer_count = 2.min(max_layers) as usize;
-        let layers = vec![Layer::Empty; layer_count.max(1)];
+        let layer_count = 2.min(max_layers).max(1) as usize;
+        let mut layers = Vec::with_capacity(layer_count);
+        layers.resize_with(layer_count, || Layer::Empty);
 
         let extent = wgpu::Extent3d {
             width: size,
