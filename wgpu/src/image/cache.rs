@@ -363,18 +363,12 @@ fn load_image<'a>(
     use crate::image::raster::Memory;
 
     if !cache.contains(handle) {
-        if cfg!(target_arch = "wasm32") {
-            // TODO: Concurrent support for Wasm
-            cache.insert(handle, Memory::load(handle));
-        } else if let core::image::Handle::Rgba { .. } = handle {
-            // Load RGBA handles synchronously, since it's very cheap
-            cache.insert(handle, Memory::load(handle));
-        } else if !pending.contains_key(&handle.id()) {
-            let _ = pending.insert(handle.id(), Vec::from_iter(callback));
+        let _ = pending;
+        let _ = callback;
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = worker;
 
-            #[cfg(not(target_arch = "wasm32"))]
-            worker.load(handle, false);
-        }
+        cache.insert(handle, Memory::load(handle));
     }
 
     cache.get_mut(handle)
