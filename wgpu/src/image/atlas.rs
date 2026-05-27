@@ -21,6 +21,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct Atlas {
     size: u32,
+    max_layers: u32,
     backend: wgpu::Backend,
     texture: wgpu::Texture,
     texture_view: wgpu::TextureView,
@@ -45,13 +46,16 @@ impl Atlas {
         texture_layout: wgpu::BindGroupLayout,
         size: u32,
     ) -> Self {
-        let max_device_size = device.limits().max_texture_dimension_2d;
+        let limits = device.limits();
+        let max_device_size = limits.max_texture_dimension_2d;
+        let max_layers = limits.max_texture_array_layers.max(1);
         let size = size.min(MAX_SIZE).min(max_device_size).max(1);
 
         // We always create at least 2 layers because the atlas is bound as a
         // D2Array texture view. Some backends reject a 1-layer texture viewed
         // as an array texture.
-        let layers = vec![Layer::Empty, Layer::Empty];
+        let layer_count = 2.min(max_layers) as usize;
+        let layers = vec![Layer::Empty; layer_count.max(1)];
 
         let extent = wgpu::Extent3d {
             width: size,
@@ -94,6 +98,7 @@ impl Atlas {
 
         Atlas {
             size,
+            max_layers,
             backend,
             texture,
             texture_view,
@@ -200,6 +205,10 @@ impl Atlas {
                 }));
             }
 
+            if self.layers.len() >= self.max_layers as usize {
+                return None;
+            }
+
             self.layers.push(Layer::Full);
 
             return Some(Entry::Contiguous(Allocation::Full {
@@ -274,7 +283,11 @@ impl Atlas {
         let mut allocator = Allocator::new(self.size);
 
         if let Some(region) = allocator.allocate(width, height) {
-            self.layers.push(Layer::Busy(allocator));
+        if self.layers.len() >= self.max_layers as usize {
+            return None;
+        }
+
+        self.layers.push(Layer::Busy(allocator));
 
             return Some(Entry::Contiguous(Allocation::Partial {
                 region,
@@ -456,12 +469,13 @@ impl Atlas {
         // This will over-allocate some unused memory on GL, but it's better than not being able to
         // grow the atlas past multiples of 6!
         // https://github.com/gfx-rs/wgpu/blob/004e3efe84a320d9331371ed31fa50baa2414911/wgpu-hal/src/gles/mod.rs#L371
-        let depth_or_array_layers = match backend {
+        let mut depth_or_array_layers = match backend {
             wgpu::Backend::Gl if self.layers.len().is_multiple_of(6) => {
                 self.layers.len() as u32 + 1
             }
             _ => self.layers.len() as u32,
         };
+        depth_or_array_layers = depth_or_array_layers.min(self.max_layers.max(1));
 
         let new_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("iced_wgpu::image texture atlas"),
@@ -523,10 +537,11 @@ impl Atlas {
         let old_texture = std::mem::replace(&mut self.texture, new_texture);
         self.old_textures.push(old_texture);
 
+        let layer_count = (self.layers.len() as u32).min(depth_or_array_layers);
         self.texture_view = self.texture.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2Array),
             base_array_layer: 0,
-            array_layer_count: Some(depth_or_array_layers),
+            array_layer_count: Some(layer_count),
             ..Default::default()
         });
 
