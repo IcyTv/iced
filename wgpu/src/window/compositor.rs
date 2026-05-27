@@ -289,6 +289,7 @@ impl graphics::Compositor for Compositor {
     }
 
     fn create_renderer(&self, settings: renderer::Settings) -> Self::Renderer {
+        log::debug!("iced_wgpu compositor: create_renderer");
         Renderer::new(self.engine.clone(), settings)
     }
 
@@ -298,6 +299,7 @@ impl graphics::Compositor for Compositor {
         width: u32,
         height: u32,
     ) -> Self::Surface {
+        log::debug!("iced_wgpu compositor: create_surface width={width} height={height}");
         let mut surface = self
             .instance
             .create_surface(wgpu::SurfaceTarget::Window(Box::new(window)))
@@ -311,6 +313,7 @@ impl graphics::Compositor for Compositor {
     }
 
     fn configure_surface(&mut self, surface: &mut Self::Surface, width: u32, height: u32) {
+        log::debug!("iced_wgpu compositor: configure_surface width={width} height={height}");
         surface.configure(
             &self.engine.device,
             &wgpu::SurfaceConfiguration {
@@ -343,6 +346,12 @@ impl graphics::Compositor for Compositor {
         background_color: Color,
         on_pre_present: impl FnOnce(),
     ) -> Result<(), compositor::SurfaceError> {
+        log::debug!(
+            "iced_wgpu compositor: present viewport={}x{} scale={}",
+            viewport.physical_size().width,
+            viewport.physical_size().height,
+            viewport.scale_factor()
+        );
         present(
             renderer,
             surface,

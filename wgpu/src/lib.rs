@@ -683,12 +683,16 @@ impl Renderer {
 impl Renderer {
     fn image_cache(&self) -> std::cell::RefMut<'_, image::Cache> {
         std::cell::RefMut::map(self.image_cache.borrow_mut(), |cache| {
-            cache.get_or_insert_with(|| self.engine.create_image_cache())
+            cache.get_or_insert_with(|| {
+                log::debug!("iced_wgpu renderer: lazily creating image cache");
+                self.engine.create_image_cache()
+            })
         })
     }
 
     fn image_cache_mut(&mut self) -> &mut image::Cache {
         if self.image_cache.get_mut().is_none() {
+            log::debug!("iced_wgpu renderer: eagerly creating image cache");
             let cache = self.engine.create_image_cache();
             *self.image_cache.get_mut() = Some(cache);
         }
