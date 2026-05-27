@@ -31,27 +31,15 @@ impl Cache {
         #[cfg(all(feature = "image", not(target_arch = "wasm32")))]
         let worker = Worker::new(device, _queue, backend, layout.clone(), _shell);
 
-        let mut atlas = Atlas::new(device, backend, layout);
-        let atlas_is_valid = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            atlas.bind_group();
-        })) {
-            Ok(()) => true,
-            Err(_) => {
-                log::warn!(
-                    "iced_wgpu image cache: atlas creation failed; using fallback allocator"
-                );
-                false
-            }
-        };
+        log::debug!("iced_wgpu image cache: creating cache backend={backend:?}");
 
         Self {
-            atlas,
+            atlas: Atlas::new(device, backend, layout),
             #[cfg(feature = "image")]
             raster: Raster {
                 cache: crate::image::raster::Cache::default(),
                 pending: HashMap::new(),
                 belt: wgpu::util::StagingBelt::new(device.clone(), 2 * 1024 * 1024),
-                atlas_is_valid,
             },
             #[cfg(feature = "svg")]
             vector: crate::image::vector::Cache::default(),
@@ -120,26 +108,22 @@ impl Cache {
                     label: Some("raster image upload"),
                 });
 
-                let entry = if self.raster.atlas_is_valid {
-                    self.atlas.upload(
-                        device,
-                        &mut encoder,
-                        &mut self.raster.belt,
-                        image.width(),
-                        image.height(),
-                        image,
-                    )
-                } else {
-                    None
-                };
+                let entry = self.atlas.upload(
+                    device,
+                    &mut encoder,
+                    &mut self.raster.belt,
+                    image.width(),
+                    image.height(),
+                    image,
+                );
 
                 self.raster.belt.finish();
                 let submission = queue.submit([encoder.finish()]);
                 self.raster.belt.recall();
 
-        let Some(entry) = entry else {
-            return Err(core::image::Error::OutOfMemory);
-        };
+                let Some(entry) = entry else {
+                    return Err(core::image::Error::OutOfMemory);
+                };
 
                 let _ = device.poll(wgpu::PollType::Wait {
                     submission_index: Some(submission),
@@ -237,9 +221,6 @@ impl Cache {
         }
 
         let image = memory.host()?;
-        if !self.raster.atlas_is_valid {
-            return None;
-        }
 
         const MAX_SYNC_SIZE: usize = 2 * 1024 * 1024;
 
@@ -281,13 +262,9 @@ impl Cache {
         size: Size<u32>,
     ) -> Option<(&atlas::Entry, &Arc<wgpu::BindGroup>)> {
         // TODO: Concurrency
-        if self.raster.atlas_is_valid {
-            self.vector
-                .upload(device, encoder, belt, handle, color, size, &mut self.atlas)
-                .map(|entry| (entry, self.atlas.bind_group()))
-        } else {
-            None
-        }
+        self.vector
+            .upload(device, encoder, belt, handle, color, size, &mut self.atlas)
+            .map(|entry| (entry, self.atlas.bind_group()))
     }
 
     pub fn trim(&mut self) {
@@ -374,7 +351,6 @@ struct Raster {
     cache: crate::image::raster::Cache,
     pending: HashMap<core::image::Id, Vec<Callback>>,
     belt: wgpu::util::StagingBelt,
-    atlas_is_valid: bool,
 }
 
 #[cfg(feature = "image")]
@@ -593,23 +569,12 @@ mod worker {
                     label: Some("raster image upload"),
                 });
 
-            let mut atlas = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                Atlas::with_size(
-                    &self.device,
-                    self.backend,
-                    self.texture_layout.clone(),
-                    width.max(height),
-                )
-            })) {
-                Ok(atlas) => atlas,
-                Err(_) => {
-                    let _ = self.output.send(Work::Error {
-                        handle,
-                        error: image::Error::OutOfMemory,
-                    });
-                    return;
-                }
-            };
+            let mut atlas = Atlas::with_size(
+                &self.device,
+                self.backend,
+                self.texture_layout.clone(),
+                width.max(height),
+            );
 
             let Some(entry) = atlas.upload(
                 &self.device,
