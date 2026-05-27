@@ -55,6 +55,13 @@ impl Atlas {
         // D2Array texture view. Some backends reject a 1-layer texture viewed
         // as an array texture.
         let layer_count = 2.min(max_layers).max(1) as usize;
+        if max_layers < 2 {
+            log::warn!(
+                "iced_wgpu atlas: device reports max_texture_array_layers={}, forcing {} layer(s)",
+                max_layers,
+                layer_count
+            );
+        }
         let mut layers = Vec::with_capacity(layer_count);
         layers.resize_with(layer_count, || Layer::Empty);
 
@@ -63,6 +70,15 @@ impl Atlas {
             height: size,
             depth_or_array_layers: layers.len() as u32,
         };
+
+        log::debug!(
+            "iced_wgpu atlas: size={} layers={} max_size={} max_layers={} backend={:?}",
+            size,
+            layers.len(),
+            max_device_size,
+            max_layers,
+            backend
+        );
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("iced_wgpu::image texture atlas"),
