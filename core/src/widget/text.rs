@@ -189,6 +189,50 @@ where
     }
 }
 
+impl<'a, Theme, Renderer> Text<'a, Theme, Renderer>
+where
+    Theme: Catalog,
+    Renderer: text::Renderer<Font = crate::Font>,
+{
+    /// Sets the [`Font`] of the [`Text`] to default if unset (`None`) before, and sets the font
+    /// weight to `weight`
+    ///
+    /// [`Font`]: crate::Font
+    pub fn weight(mut self, weight: crate::font::Weight) -> Self {
+        let font = if let Some(font) = self.format.font {
+            font
+        } else {
+            crate::Font::default()
+        };
+
+        self.format.font = Some(crate::Font {
+            weight,
+            ..font
+        });
+
+        self
+    }
+
+    /// Sets the [`Font`] of the [`Text`] to default if unset (`None`) before, and sets the font
+    /// stretch to `stretch`
+    ///
+    /// [`Font`]: crate::Font
+    pub fn stretch(mut self, stretch: crate::font::Stretch) -> Self {
+        let font = if let Some(font) = self.format.font {
+            font
+        } else {
+            crate::Font::default()
+        };
+
+        self.format.font = Some(crate::Font {
+            stretch,
+            ..font
+        });
+
+        self
+    }
+}
+
 /// The internal state of a [`Text`] widget.
 pub type State<P> = paragraph::Plain<P>;
 
