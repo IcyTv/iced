@@ -150,7 +150,7 @@ impl State {
 
     pub fn prepare(
         &mut self,
-        pipeline: &Pipeline,
+        pipeline: &mut Pipeline,
         device: &wgpu::Device,
         belt: &mut wgpu::util::StagingBelt,
         encoder: &mut wgpu::CommandEncoder,
@@ -171,6 +171,10 @@ impl State {
                     transformation,
                     meshes,
                 } => {
+                    if meshes.iter().any(|mesh| matches!(mesh, Mesh::Gradient { .. })) {
+                        pipeline.ensure_gradient(device);
+                    }
+
                     if self.layers.len() <= self.prepare_layer {
                         self.layers
                             .push(Layer::new(device, &pipeline.solid, &pipeline.gradient));
@@ -193,6 +197,14 @@ impl State {
                     transformation,
                     cache,
                 } => {
+                    if cache
+                        .batch()
+                        .iter()
+                        .any(|mesh| matches!(mesh, Mesh::Gradient { .. }))
+                    {
+                        pipeline.ensure_gradient(device);
+                    }
+
                     self.storage.prepare(
                         device,
                         encoder,
@@ -278,6 +290,10 @@ impl Pipeline {
             solid: solid::Pipeline::new(device, format, antialiasing),
             gradient: gradient::Pipeline::new(device, format, antialiasing),
         }
+    }
+
+    fn ensure_gradient(&mut self, device: &wgpu::Device) {
+        self.gradient.ensure(device);
     }
 }
 
@@ -515,7 +531,12 @@ impl Layer {
                 }
                 Mesh::Gradient { buffers, .. } => {
                     if last_is_solid.unwrap_or(true) {
-                        render_pass.set_pipeline(&gradient.pipeline);
+                        let pipeline = gradient
+                            .pipeline
+                            .as_ref()
+                            .expect("Gradient pipeline should be initialized before rendering");
+
+                        render_pass.set_pipeline(pipeline);
 
                         last_is_solid = Some(false);
                     }
@@ -750,8 +771,10 @@ mod gradient {
 
     #[derive(Debug, Clone)]
     pub struct Pipeline {
-        pub pipeline: wgpu::RenderPipeline,
         pub constants_layout: wgpu::BindGroupLayout,
+        pub pipeline: Option<wgpu::RenderPipeline>,
+        format: wgpu::TextureFormat,
+        antialiasing: Option<Antialiasing>,
     }
 
     #[derive(Debug)]
@@ -818,9 +841,22 @@ mod gradient {
                     entries: &[triangle::Uniforms::entry()],
                 });
 
+            Self {
+                constants_layout,
+                pipeline: None,
+                format,
+                antialiasing,
+            }
+        }
+
+        pub fn ensure(&mut self, device: &wgpu::Device) {
+            if self.pipeline.is_some() {
+                return;
+            }
+
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("iced_wgpu.triangle.gradient.pipeline_layout"),
-                bind_group_layouts: &[Some(&constants_layout)],
+                bind_group_layouts: &[Some(&self.constants_layout)],
                 immediate_size: 0,
             });
 
@@ -868,20 +904,17 @@ mod gradient {
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some("gradient_fs_main"),
-                    targets: &[Some(triangle::fragment_target(format))],
+                    targets: &[Some(triangle::fragment_target(self.format))],
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
                 primitive: triangle::primitive_state(),
                 depth_stencil: None,
-                multisample: triangle::multisample_state(antialiasing),
+                multisample: triangle::multisample_state(self.antialiasing),
                 multiview_mask: None,
                 cache: None,
             });
 
-            Self {
-                pipeline,
-                constants_layout,
-            }
+            self.pipeline = Some(pipeline);
         }
     }
 }

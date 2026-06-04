@@ -66,7 +66,7 @@ impl State {
 
     pub fn prepare(
         &mut self,
-        pipeline: &Pipeline,
+        pipeline: &mut Pipeline,
         device: &wgpu::Device,
         belt: &mut wgpu::util::StagingBelt,
         encoder: &mut wgpu::CommandEncoder,
@@ -80,6 +80,10 @@ impl State {
         }
 
         let layer = &mut self.layers[self.prepare_layer];
+        if !quads.gradients.is_empty() {
+            pipeline.ensure_gradient(device);
+        }
+
         layer.prepare(device, encoder, belt, quads, transformation, scale);
 
         self.prepare_layer += 1;
@@ -154,6 +158,10 @@ impl Pipeline {
             gradient: gradient::Pipeline::new(device, format, &constant_layout),
             constant_layout,
         }
+    }
+
+    fn ensure_gradient(&mut self, device: &wgpu::Device) {
+        self.gradient.ensure(device);
     }
 }
 

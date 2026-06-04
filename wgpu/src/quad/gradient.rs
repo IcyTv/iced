@@ -60,7 +60,11 @@ impl Layer {
 #[derive(Debug, Clone)]
 pub struct Pipeline {
     #[cfg(not(target_arch = "wasm32"))]
-    pipeline: wgpu::RenderPipeline,
+    pipeline: Option<wgpu::RenderPipeline>,
+    #[cfg(not(target_arch = "wasm32"))]
+    format: wgpu::TextureFormat,
+    #[cfg(not(target_arch = "wasm32"))]
+    constants_layout: wgpu::BindGroupLayout,
 }
 
 impl Pipeline {
@@ -72,34 +76,51 @@ impl Pipeline {
     ) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("iced_wgpu.quad.gradient.pipeline"),
-                bind_group_layouts: &[Some(constants_layout)],
-                immediate_size: 0,
-            });
+            Self {
+                pipeline: None,
+                format,
+                constants_layout: constants_layout.clone(),
+            }
+        }
 
-            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("iced_wgpu.quad.gradient.shader"),
-                source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(concat!(
-                    include_str!("../shader/quad.wgsl"),
-                    "\n",
-                    include_str!("../shader/vertex.wgsl"),
-                    "\n",
-                    include_str!("../shader/quad/gradient.wgsl"),
-                    "\n",
-                    include_str!("../shader/color.wgsl"),
-                    "\n",
-                    include_str!("../shader/color/linear_rgb.wgsl")
-                ))),
-            });
+        #[cfg(target_arch = "wasm32")]
+        Self {}
+    }
 
-            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("iced_wgpu.quad.gradient.pipeline"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("gradient_vs_main"),
-                    buffers: &[wgpu::VertexBufferLayout {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn ensure(&mut self, device: &wgpu::Device) {
+        if self.pipeline.is_some() {
+            return;
+        }
+
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("iced_wgpu.quad.gradient.pipeline"),
+            bind_group_layouts: &[Some(&self.constants_layout)],
+            immediate_size: 0,
+        });
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("iced_wgpu.quad.gradient.shader"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(concat!(
+                include_str!("../shader/quad.wgsl"),
+                "\n",
+                include_str!("../shader/vertex.wgsl"),
+                "\n",
+                include_str!("../shader/quad/gradient.wgsl"),
+                "\n",
+                include_str!("../shader/color.wgsl"),
+                "\n",
+                include_str!("../shader/color/linear_rgb.wgsl")
+            ))),
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("iced_wgpu.quad.gradient.pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("gradient_vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<Gradient>() as u64,
                         step_mode: wgpu::VertexStepMode::Instance,
                         attributes: &wgpu::vertex_attr_array!(
@@ -126,36 +147,35 @@ impl Pipeline {
                             // Snap
                             10 => Uint32,
                         ),
-                    }],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("gradient_fs_main"),
-                    targets: &quad::color_target_state(format),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    front_face: wgpu::FrontFace::Cw,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview_mask: None,
-                cache: None,
-            });
+                }],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("gradient_fs_main"),
+                targets: &quad::color_target_state(self.format),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Cw,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview_mask: None,
+            cache: None,
+        });
 
-            Self { pipeline }
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        Self {}
+        self.pipeline = Some(pipeline);
     }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn ensure(&mut self, _device: &wgpu::Device) {}
 
     #[allow(unused_variables)]
     pub fn render<'a>(
@@ -167,7 +187,12 @@ impl Pipeline {
     ) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            render_pass.set_pipeline(&self.pipeline);
+            let pipeline = self
+                .pipeline
+                .as_ref()
+                .expect("Gradient pipeline should be initialized before rendering");
+
+            render_pass.set_pipeline(pipeline);
             render_pass.set_bind_group(0, constants, &[]);
             render_pass.set_vertex_buffer(0, layer.instances.slice(..));
 
