@@ -76,15 +76,24 @@ impl crate::graphics::Compositor for Compositor {
     }
 
     fn configure_surface(&mut self, surface: &mut Self::Surface, width: u32, height: u32) {
+        let width = NonZeroU32::new(width).expect("Non-zero width");
+        let height = NonZeroU32::new(height).expect("Non-zero height");
+        let alpha_mode = if surface
+            .window
+            .supports_alpha_mode(softbuffer::AlphaMode::Premultiplied)
+        {
+            softbuffer::AlphaMode::Premultiplied
+        } else {
+            softbuffer::AlphaMode::Opaque
+        };
+
         surface
             .window
-            .resize(
-                NonZeroU32::new(width).expect("Non-zero width"),
-                NonZeroU32::new(height).expect("Non-zero height"),
-            )
-            .expect("Resize surface");
+            .configure(width, height, alpha_mode)
+            .expect("Configure surface");
 
-        surface.clip_mask = tiny_skia::Mask::new(width, height).expect("Create clip mask");
+        surface.clip_mask =
+            tiny_skia::Mask::new(width.get(), height.get()).expect("Create clip mask");
         surface.frames.clear();
     }
 
@@ -141,7 +150,7 @@ pub fn present(
 
     let mut buffer = surface
         .window
-        .buffer_mut()
+        .next_buffer()
         .map_err(|_| compositor::SurfaceError::Lost)?;
 
     let last_frame = {
@@ -183,7 +192,7 @@ pub fn present(
         let damage = damage::group(damage, Rectangle::with_size(viewport.logical_size()));
 
         let mut pixels = tiny_skia::PixmapMut::from_bytes(
-            bytemuck::cast_slice_mut(&mut buffer),
+            buffer.data_u8(),
             physical_size.width,
             physical_size.height,
         )
