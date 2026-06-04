@@ -311,7 +311,7 @@ impl Renderer {
                 let prepare_span = debug::prepare(debug::Primitive::Quad);
 
                 self.quad.prepare(
-                    &self.engine.quad_pipeline,
+                    &mut self.engine.quad_pipeline,
                     &self.engine.device,
                     &mut self.staging_belt,
                     encoder,
@@ -327,7 +327,7 @@ impl Renderer {
                 let prepare_span = debug::prepare(debug::Primitive::Triangle);
 
                 self.triangle.prepare(
-                    &self.engine.triangle_pipeline,
+                    &mut self.engine.triangle_pipeline,
                     &self.engine.device,
                     &mut self.staging_belt,
                     encoder,
