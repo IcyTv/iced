@@ -3660,6 +3660,7 @@ checksum = "e022c9d066895efa1345f8e33e584b9f958da2fd4cd116792e15e07e4720a807"
 dependencies = [
  "bitflags 2.13.1",
  "dispatch2",
+ "libc",
  "objc2 0.6.4",
  "objc2-core-foundation",
  "objc2-io-surface",
@@ -4692,6 +4693,15 @@ dependencies = [
 
 [[package]]
 name = "redox_syscall"
+version = "0.7.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4666a1a60d8412eab19d94f6d13dcc9cea0a5ef4fdf6a5db306537413c661b1b"
+dependencies = [
+ "bitflags 2.13.1",
+]
+
+[[package]]
+name = "redox_syscall"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d678d17679829e73d371e96880897e98fee2ded7acc0a50bdf8af2affa4b2fe5"
@@ -5369,13 +5379,12 @@ dependencies = [
 [[package]]
 name = "softbuffer"
 version = "0.4.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aac18da81ebbf05109ab275b157c22a653bb3c12cf884450179942f81bcbf6c3"
+source = "git+https://github.com/rust-windowing/softbuffer?rev=840683cfce68a04d20cfb75b2976d009d3ba77d8#840683cfce68a04d20cfb75b2976d009d3ba77d8"
 dependencies = [
  "as-raw-xcb-connection",
- "bytemuck",
  "fastrand",
  "js-sys",
+ "libc",
  "memmap2",
  "ndk",
  "objc2 0.6.4",
@@ -5384,7 +5393,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "objc2-quartz-core 0.3.2",
  "raw-window-handle",
- "redox_syscall 0.5.18",
+ "redox_syscall 0.7.5",
  "rustix 1.1.4",
  "tiny-xlib",
  "tracing",

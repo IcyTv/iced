@@ -183,10 +183,9 @@ where
     }
 }
 
-impl<'a, Theme, Renderer> Text<'a, Theme, Renderer>
+impl<'a, Theme> Text<'a, Theme>
 where
     Theme: Catalog,
-    Renderer: text::Renderer<Font = crate::Font>,
 {
     /// Sets the [`Font`] of the [`Text`] to default if unset (`None`) before, and sets the font
     /// weight to `weight`

@@ -735,7 +735,7 @@ impl core::Renderer for Renderer {
         {
             let device = self.engine.device.clone();
             let queue = self.engine.queue.clone();
-            self.image_cache_mut()
+            self.image_cache()
                 .allocate_image(&device, &queue, _handle, _callback);
         }
     }

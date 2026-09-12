@@ -243,6 +243,9 @@ web-time = "1.1"
 wgpu = { version = "29", default-features = false, features = ["std", "wgsl"] }
 winit = { git = "https://github.com/iced-rs/winit.git", rev = "05b8ff17a06562f0a10bb46e6eaacbe2a95cb5ed", default-features = false, features = ["rwh_06"] }
 
+[patch.crates-io]
+softbuffer = { git = "https://github.com/rust-windowing/softbuffer", rev = "840683cfce68a04d20cfb75b2976d009d3ba77d8" }
+
 [workspace.lints.rust]
 rust_2018_idioms = { level = "deny", priority = -1 }
 missing_docs = "deny"
