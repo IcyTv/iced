@@ -15,6 +15,7 @@ pub struct Compositor {
     alpha_mode: wgpu::CompositeAlphaMode,
     engine: Engine,
     settings: Settings,
+    frame_pipeline: Option<crate::snapshot::Pipeline>,
 }
 
 /// A compositor error.
@@ -202,6 +203,7 @@ impl Compositor {
                         alpha_mode,
                         engine,
                         settings,
+                        frame_pipeline: None,
                     });
                 }
                 Err(error) => {
@@ -264,6 +266,41 @@ pub fn present(
 impl graphics::Compositor for Compositor {
     type Renderer = Renderer;
     type Surface = wgpu::Surface<'static>;
+
+    fn supports_frames(&self) -> bool {
+        true
+    }
+
+    fn capture_frame(
+        &mut self,
+        renderer: &mut Renderer,
+        viewport: &Viewport,
+        background: Color,
+    ) -> Option<compositor::Frame> {
+        Some(renderer.capture_frame(viewport, background))
+    }
+
+    fn present_frame(
+        &mut self,
+        frame: Option<&compositor::Frame>,
+        presentation: compositor::FramePresentation,
+        surface: &mut Self::Surface,
+        viewport: &Viewport,
+        on_pre_present: impl FnOnce(),
+    ) -> Result<(), compositor::SurfaceError> {
+        let pipeline = self.frame_pipeline.get_or_insert_with(|| {
+            crate::snapshot::Pipeline::new(&self.engine.device, self.format)
+        });
+        pipeline.present(
+            &self.engine.device,
+            &self.engine.queue,
+            frame,
+            presentation,
+            surface,
+            viewport,
+            on_pre_present,
+        )
+    }
 
     async fn new(
         settings: backend::Settings,

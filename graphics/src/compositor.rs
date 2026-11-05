@@ -12,6 +12,59 @@ use thiserror::Error;
 
 use std::borrow::Cow;
 use std::fmt::Debug;
+use std::{any::Any, sync::Arc};
+
+/// Immutable rendered content, owned independently of its renderer and widgets.
+#[derive(Clone)]
+pub struct Frame(Arc<dyn Any + Send + Sync>);
+
+impl Frame {
+    /// Wraps a backend-owned frame. The payload must retain all render resources.
+    pub fn new(payload: impl Any + Send + Sync) -> Self {
+        Self(Arc::new(payload))
+    }
+    /// Obtains the payload belonging to a specific compositor implementation.
+    pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
+        self.0.downcast_ref()
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::Frame;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct Resources(Arc<AtomicUsize>);
+    impl Drop for Resources {
+        fn drop(&mut self) {
+            let _ = self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    #[test]
+    fn retained_frames_own_resources_after_the_source_releases_them() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let source = Frame::new(Resources(drops.clone()));
+        let exit = source.clone();
+        drop(source);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        assert!(exit.downcast_ref::<Resources>().is_some());
+        drop(exit);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+}
+
+/// Presentation of an immutable frame. Geometry is in application-logical units.
+#[derive(Debug, Clone, Copy)]
+pub struct FramePresentation {
+    /// Maps source content into the target's application-logical coordinates.
+    pub transformation: crate::core::Transformation,
+    /// Multiplies premultiplied RGB and alpha, clamped to zero through one.
+    pub opacity: f32,
+    /// Clips transformed content in target application-logical coordinates.
+    pub clip: crate::core::Rectangle,
+}
 
 /// A graphics compositor that can draw to windows.
 pub trait Compositor: Sized {
@@ -20,6 +73,35 @@ pub trait Compositor: Sized {
 
     /// The surface of the backend.
     type Surface;
+
+    /// Whether this compositor can retain and replay immutable rendered frames.
+    fn supports_frames(&self) -> bool {
+        false
+    }
+
+    /// Captures the current primitives without borrowing the widget tree.
+    /// GPU implementations must not read pixels back to the CPU.
+    fn capture_frame(
+        &mut self,
+        _renderer: &mut Self::Renderer,
+        _viewport: &Viewport,
+        _background_color: Color,
+    ) -> Option<Frame> {
+        None
+    }
+
+    /// Presents retained content, or clears to transparent when `frame` is None.
+    /// Implementations call `on_pre_present` only after successful acquisition.
+    fn present_frame(
+        &mut self,
+        _frame: Option<&Frame>,
+        _presentation: FramePresentation,
+        _surface: &mut Self::Surface,
+        _viewport: &Viewport,
+        _on_pre_present: impl FnOnce(),
+    ) -> Result<(), SurfaceError> {
+        Err(SurfaceError::Other)
+    }
 
     /// Creates a new [`Compositor`] with the given [`backend::Settings`].
     fn new(

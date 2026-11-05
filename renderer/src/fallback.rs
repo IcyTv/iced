@@ -368,6 +368,47 @@ where
         }
     }
 
+    fn supports_frames(&self) -> bool {
+        match self {
+            Self::Primary(c) => c.supports_frames(),
+            Self::Secondary(c) => c.supports_frames(),
+        }
+    }
+
+    fn capture_frame(
+        &mut self,
+        renderer: &mut Self::Renderer,
+        viewport: &graphics::Viewport,
+        background: Color,
+    ) -> Option<compositor::Frame> {
+        match (self, renderer) {
+            (Self::Primary(c), Renderer::Primary(r)) => c.capture_frame(r, viewport, background),
+            (Self::Secondary(c), Renderer::Secondary(r)) => {
+                c.capture_frame(r, viewport, background)
+            }
+            _ => None,
+        }
+    }
+
+    fn present_frame(
+        &mut self,
+        frame: Option<&compositor::Frame>,
+        presentation: compositor::FramePresentation,
+        surface: &mut Self::Surface,
+        viewport: &graphics::Viewport,
+        on_pre_present: impl FnOnce(),
+    ) -> Result<(), compositor::SurfaceError> {
+        match (self, surface) {
+            (Self::Primary(c), Surface::Primary(s)) => {
+                c.present_frame(frame, presentation, s, viewport, on_pre_present)
+            }
+            (Self::Secondary(c), Surface::Secondary(s)) => {
+                c.present_frame(frame, presentation, s, viewport, on_pre_present)
+            }
+            _ => Err(compositor::SurfaceError::Other),
+        }
+    }
+
     fn screenshot(
         &mut self,
         renderer: &mut Self::Renderer,

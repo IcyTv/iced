@@ -33,6 +33,7 @@ mod buffer;
 mod color;
 mod engine;
 mod quad;
+mod snapshot;
 mod text;
 mod triangle;
 
