@@ -10,6 +10,9 @@ use std::collections::HashMap;
 
 use std::sync::Arc;
 
+#[cfg(all(test, feature = "image", not(target_arch = "wasm32")))]
+mod tests;
+
 pub struct Cache {
     atlas: Atlas,
     #[cfg(feature = "image")]
@@ -78,10 +81,44 @@ impl Cache {
             return;
         }
 
-        if !self.raster.cache.contains(handle) {
-            self.raster.cache.insert(handle, Memory::load(handle));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = (device, queue);
+
+            if let Some(pending) = self.raster.pending.get_mut(&handle.id()) {
+                pending.callbacks.push(Box::new(callback));
+                return;
+            }
+
+            if let Some(Memory::Error(error)) = self.raster.cache.get_mut(handle) {
+                callback(Err(error.clone()));
+                return;
+            }
+
+            let _ = self.raster.pending.insert(
+                handle.id(),
+                Pending {
+                    handle: handle.clone(),
+                    callbacks: vec![Box::new(callback)],
+                    layout: false,
+                    redraw: false,
+                },
+            );
+
+            let result = match self.raster.cache.get_mut(handle) {
+                Some(Memory::Host(image)) => self.worker.upload(handle, image.clone()),
+                _ => self.worker.load(handle),
+            };
+
+            if let Err(error) = result {
+                self.apply(worker::Work::Error {
+                    handle: handle.clone(),
+                    error,
+                });
+            }
         }
 
+        #[cfg(target_arch = "wasm32")]
         callback(self.load_image(device, queue, handle));
     }
 
@@ -93,6 +130,14 @@ impl Cache {
         handle: &core::image::Handle,
     ) -> Result<core::image::Allocation, core::image::Error> {
         use crate::image::raster::Memory;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        while self.raster.pending.contains_key(&handle.id()) {
+            match self.worker.recv() {
+                Ok(work) => self.apply(work),
+                Err(_) => self.disconnected(),
+            }
+        }
 
         if !self.raster.cache.contains(handle) {
             self.raster.cache.insert(handle, Memory::load(handle));
@@ -170,10 +215,8 @@ impl Cache {
         let image = load_image(
             &mut self.raster.cache,
             &mut self.raster.pending,
-            #[cfg(not(target_arch = "wasm32"))]
-            &self.worker,
             handle,
-            None,
+            true,
         )?;
 
         Some(image.dimensions())
@@ -197,31 +240,43 @@ impl Cache {
 
         self.receive();
 
-        let memory = load_image(
+        let image = load_image(
             &mut self.raster.cache,
             &mut self.raster.pending,
-            #[cfg(not(target_arch = "wasm32"))]
-            &self.worker,
             handle,
-            None,
-        )?;
+            false,
+        )?
+        .host();
 
-        if let Memory::Device {
-            entry, bind_group, ..
-        } = memory
-        {
-            return Some((
-                entry,
-                bind_group.as_ref().unwrap_or(self.atlas.bind_group()),
-            ));
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(image) = &image {
+            const MAX_SYNC_SIZE: usize = 2 * 1024 * 1024;
+
+            if image.len() >= MAX_SYNC_SIZE {
+                let _ = self.raster.pending.insert(
+                    handle.id(),
+                    Pending {
+                        handle: handle.clone(),
+                        callbacks: Vec::new(),
+                        layout: false,
+                        redraw: true,
+                    },
+                );
+
+                if let Err(error) = self.worker.upload(handle, image.clone()) {
+                    self.apply(worker::Work::Error {
+                        handle: handle.clone(),
+                        error,
+                    });
+                }
+
+                return None;
+            }
         }
 
-        let image = memory.host()?;
+        let memory = self.raster.cache.get_mut(handle)?;
 
-        const MAX_SYNC_SIZE: usize = 2 * 1024 * 1024;
-
-        // TODO: Concurrent Wasm support
-        if image.len() < MAX_SYNC_SIZE || cfg!(target_arch = "wasm32") {
+        if let Some(image) = image {
             let entry =
                 self.atlas
                     .upload(device, encoder, belt, image.width(), image.height(), &image)?;
@@ -231,20 +286,19 @@ impl Cache {
                 bind_group: None,
                 allocation: None,
             };
-
-            if let Memory::Device { entry, .. } = memory {
-                return Some((entry, self.atlas.bind_group()));
-            }
         }
 
-        if !self.raster.pending.contains_key(&handle.id()) {
-            let _ = self.raster.pending.insert(handle.id(), Vec::new());
-
-            #[cfg(not(target_arch = "wasm32"))]
-            self.worker.upload(handle, image);
+        if let Memory::Device {
+            entry, bind_group, ..
+        } = memory
+        {
+            Some((
+                entry,
+                bind_group.as_ref().unwrap_or(self.atlas.bind_group()),
+            ))
+        } else {
+            None
         }
-
-        None
     }
 
     #[cfg(feature = "svg")]
@@ -284,53 +338,87 @@ impl Cache {
     #[cfg(feature = "image")]
     pub fn receive(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        while let Ok(work) = self.worker.try_recv() {
-            use crate::image::raster::Memory;
-
-            match work {
-                worker::Work::Upload {
-                    handle,
-                    entry,
-                    bind_group,
-                } => {
-                    let callbacks = self.raster.pending.remove(&handle.id());
-
-                    let allocation = if let Some(callbacks) = callbacks {
-                        #[allow(unsafe_code)]
-                        let allocation = unsafe { core::image::allocate(&handle, entry.size()) };
-
-                        let reference = allocation.downgrade();
-
-                        for callback in callbacks {
-                            callback(Ok(allocation.clone()));
-                        }
-
-                        Some(reference)
-                    } else {
-                        None
-                    };
-
-                    self.raster.cache.insert(
-                        &handle,
-                        Memory::Device {
-                            entry,
-                            bind_group: Some(bind_group),
-                            allocation,
-                        },
-                    );
-                }
-                worker::Work::Error { handle, error } => {
-                    let callbacks = self.raster.pending.remove(&handle.id());
-
-                    if let Some(callbacks) = callbacks {
-                        for callback in callbacks {
-                            callback(Err(error.clone()));
-                        }
-                    }
-
-                    self.raster.cache.insert(&handle, Memory::Error(error));
+        loop {
+            match self.worker.try_recv() {
+                Ok(work) => self.apply(work),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.disconnected();
+                    break;
                 }
             }
+        }
+    }
+
+    #[cfg(all(feature = "image", not(target_arch = "wasm32")))]
+    fn apply(&mut self, work: worker::Work) {
+        use crate::image::raster::Memory;
+
+        let handle = match &work {
+            worker::Work::Upload { handle, .. } | worker::Work::Error { handle, .. } => handle,
+        };
+        let Some(pending) = self.raster.pending.remove(&handle.id()) else {
+            return;
+        };
+
+        let result = match work {
+            worker::Work::Upload {
+                handle,
+                entry,
+                bind_group,
+            } => {
+                let allocation = if pending.callbacks.is_empty() {
+                    None
+                } else {
+                    // The worker only publishes uploads after their GPU submission completes.
+                    #[allow(unsafe_code)]
+                    Some(unsafe { core::image::allocate(&handle, entry.size()) })
+                };
+
+                self.raster.cache.insert(
+                    &handle,
+                    Memory::Device {
+                        entry,
+                        bind_group: Some(bind_group),
+                        allocation: allocation.as_ref().map(core::image::Allocation::downgrade),
+                    },
+                );
+
+                Ok(allocation)
+            }
+            worker::Work::Error { handle, error } => {
+                self.raster
+                    .cache
+                    .insert(&handle, Memory::Error(error.clone()));
+
+                Err(error)
+            }
+        };
+
+        for callback in pending.callbacks {
+            callback(match &result {
+                Ok(allocation) => Ok(allocation.as_ref().unwrap().clone()),
+                Err(error) => Err(error.clone()),
+            });
+        }
+
+        self.worker.notify(pending.layout, pending.redraw);
+    }
+
+    #[cfg(all(feature = "image", not(target_arch = "wasm32")))]
+    fn disconnected(&mut self) {
+        let handles: Vec<_> = self
+            .raster
+            .pending
+            .values()
+            .map(|pending| pending.handle.clone())
+            .collect();
+
+        for handle in handles {
+            self.apply(worker::Work::Error {
+                handle,
+                error: worker::disconnected(),
+            });
         }
     }
 }
@@ -345,7 +433,7 @@ impl Drop for Cache {
 #[cfg(feature = "image")]
 struct Raster {
     cache: crate::image::raster::Cache,
-    pending: HashMap<core::image::Id, Vec<Callback>>,
+    pending: HashMap<core::image::Id, Pending>,
     belt: wgpu::util::StagingBelt,
 }
 
@@ -353,21 +441,35 @@ struct Raster {
 type Callback = Box<dyn FnOnce(Result<core::image::Allocation, core::image::Error>) + Send>;
 
 #[cfg(feature = "image")]
+struct Pending {
+    handle: core::image::Handle,
+    callbacks: Vec<Callback>,
+    layout: bool,
+    redraw: bool,
+}
+
+#[cfg(feature = "image")]
 fn load_image<'a>(
     cache: &'a mut crate::image::raster::Cache,
-    pending: &mut HashMap<core::image::Id, Vec<Callback>>,
-    #[cfg(not(target_arch = "wasm32"))] worker: &Worker,
+    pending: &mut HashMap<core::image::Id, Pending>,
     handle: &core::image::Handle,
-    callback: Option<Callback>,
+    measure: bool,
 ) -> Option<&'a mut crate::image::raster::Memory> {
     use crate::image::raster::Memory;
 
-    if !cache.contains(handle) {
-        let _ = pending;
-        let _ = callback;
-        #[cfg(not(target_arch = "wasm32"))]
-        let _ = worker;
+    if let Some(pending) = pending.get_mut(&handle.id()) {
+        if measure {
+            pending.layout = true;
 
+            // A previously decoded host image can still answer layout queries.
+            return cache.get_mut(handle);
+        }
+
+        pending.redraw = true;
+        return None;
+    }
+
+    if !cache.contains(handle) {
         cache.insert(handle, Memory::load(handle));
     }
 
@@ -387,9 +489,10 @@ mod worker {
     use std::thread;
 
     pub struct Worker {
-        jobs: mpsc::SyncSender<Job>,
-        quit: mpsc::SyncSender<()>,
+        jobs: mpsc::Sender<Job>,
+        quit: mpsc::Sender<()>,
         work: mpsc::Receiver<Work>,
+        shell: Shell,
         handle: Option<std::thread::JoinHandle<()>>,
     }
 
@@ -401,9 +504,9 @@ mod worker {
             texture_layout: wgpu::BindGroupLayout,
             shell: &Shell,
         ) -> Self {
-            let (jobs_sender, jobs_receiver) = mpsc::sync_channel(1_000);
-            let (quit_sender, quit_receiver) = mpsc::sync_channel(1);
-            let (work_sender, work_receiver) = mpsc::sync_channel(1_000);
+            let (jobs_sender, jobs_receiver) = mpsc::channel();
+            let (quit_sender, quit_receiver) = mpsc::channel();
+            let (work_sender, work_receiver) = mpsc::channel();
 
             let instance = Instance {
                 device: device.clone(),
@@ -417,30 +520,40 @@ mod worker {
                 quit: quit_receiver,
             };
 
-            let handle = thread::spawn(move || instance.run());
+            let shell_on_exit = shell.clone();
+            let handle = thread::spawn(move || {
+                let _wake_on_exit = WakeOnExit(shell_on_exit);
+                instance.run();
+            });
 
             Self {
                 jobs: jobs_sender,
                 quit: quit_sender,
                 work: work_receiver,
+                shell: shell.clone(),
                 handle: Some(handle),
             }
         }
 
-        pub fn load(&self, handle: &image::Handle, is_allocation: bool) {
-            let _ = self.jobs.send(Job::Load {
-                handle: handle.clone(),
-                is_allocation,
-            });
+        pub fn load(&self, handle: &image::Handle) -> Result<(), image::Error> {
+            self.jobs
+                .send(Job::Load(handle.clone()))
+                .map_err(|_| disconnected())
         }
 
-        pub fn upload(&self, handle: &image::Handle, image: raster::Image) {
-            let _ = self.jobs.send(Job::Upload {
-                handle: handle.clone(),
-                width: image.width(),
-                height: image.height(),
-                rgba: image.into_raw(),
-            });
+        pub fn upload(
+            &self,
+            handle: &image::Handle,
+            image: raster::Image,
+        ) -> Result<(), image::Error> {
+            self.jobs
+                .send(Job::Upload {
+                    handle: handle.clone(),
+                    width: image.width(),
+                    height: image.height(),
+                    rgba: image.into_raw(),
+                })
+                .map_err(|_| disconnected())
         }
 
         pub fn drop(&self, bind_group: Arc<wgpu::BindGroup>) {
@@ -451,11 +564,59 @@ mod worker {
             self.work.try_recv()
         }
 
+        pub fn recv(&self) -> Result<Work, mpsc::RecvError> {
+            self.work.recv()
+        }
+
+        #[cfg(test)]
+        pub fn gate(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+            let (entered, ready) = mpsc::channel();
+            let (resume, wait) = mpsc::channel();
+            self.jobs
+                .send(Job::Gate {
+                    entered,
+                    resume: wait,
+                })
+                .unwrap();
+
+            (ready, resume)
+        }
+
+        pub fn notify(&self, layout: bool, redraw: bool) {
+            if layout {
+                self.shell.invalidate_layout();
+            }
+
+            if redraw {
+                self.shell.request_redraw();
+            }
+        }
+
+        #[cfg(test)]
+        pub fn quit_gated(&mut self, resume: mpsc::Sender<()>) {
+            let _ = self.quit.send(());
+            drop(resume);
+            self.quit();
+        }
+
         pub fn quit(&mut self) {
-            let _ = self.quit.try_send(());
+            let _ = self.quit.send(());
             let _ = self.jobs.send(Job::Quit);
             let _ = self.handle.take().map(thread::JoinHandle::join);
         }
+    }
+
+    struct WakeOnExit(Shell);
+
+    impl Drop for WakeOnExit {
+        fn drop(&mut self) {
+            // The result sender has already dropped, including when the worker unwinds.
+            self.0.tick();
+        }
+    }
+
+    pub fn disconnected() -> image::Error {
+        image::Error::Invalid(Arc::new(std::io::Error::other("image worker disconnected")))
     }
 
     pub struct Instance {
@@ -466,16 +627,13 @@ mod worker {
         shell: Shell,
         belt: wgpu::util::StagingBelt,
         jobs: mpsc::Receiver<Job>,
-        output: mpsc::SyncSender<Work>,
+        output: mpsc::Sender<Work>,
         quit: mpsc::Receiver<()>,
     }
 
     #[derive(Debug)]
     enum Job {
-        Load {
-            handle: image::Handle,
-            is_allocation: bool,
-        },
+        Load(image::Handle),
         Upload {
             handle: image::Handle,
             rgba: Bytes,
@@ -483,6 +641,11 @@ mod worker {
             height: u32,
         },
         Drop(Arc<wgpu::BindGroup>),
+        #[cfg(test)]
+        Gate {
+            entered: mpsc::Sender<()>,
+            resume: mpsc::Receiver<()>,
+        },
         Quit,
     }
 
@@ -510,24 +673,11 @@ mod worker {
                 };
 
                 match job {
-                    Job::Load {
-                        handle,
-                        is_allocation,
-                    } => match crate::graphics::image::load(&handle) {
-                        Ok(image) => self.upload(
-                            handle,
-                            image.width(),
-                            image.height(),
-                            image.into_raw(),
-                            if is_allocation {
-                                Shell::tick
-                            } else {
-                                Shell::invalidate_layout
-                            },
-                        ),
-                        Err(error) => {
-                            let _ = self.output.send(Work::Error { handle, error });
+                    Job::Load(handle) => match crate::graphics::image::load(&handle) {
+                        Ok(image) => {
+                            self.upload(handle, image.width(), image.height(), image.into_raw())
                         }
+                        Err(error) => self.publish(Work::Error { handle, error }),
                     },
                     Job::Upload {
                         handle,
@@ -535,24 +685,36 @@ mod worker {
                         width,
                         height,
                     } => {
-                        self.upload(handle, width, height, rgba, Shell::request_redraw);
+                        self.upload(handle, width, height, rgba);
                     }
                     Job::Drop(bind_group) => {
                         drop(bind_group);
+                    }
+                    #[cfg(test)]
+                    Job::Gate { entered, resume } => {
+                        let _ = entered.send(());
+                        let _ = resume.recv();
                     }
                     Job::Quit => return,
                 }
             }
         }
 
-        fn upload(
-            &mut self,
-            handle: image::Handle,
-            width: u32,
-            height: u32,
-            rgba: Bytes,
-            callback: fn(&Shell),
-        ) {
+        fn publish(&self, work: Work) {
+            if self.output.send(work).is_ok() {
+                self.shell.tick();
+            }
+        }
+
+        fn upload(&mut self, handle: image::Handle, width: u32, height: u32, rgba: Bytes) {
+            if width == 0 || height == 0 {
+                self.publish(Work::Error {
+                    handle,
+                    error: image::Error::Empty,
+                });
+                return;
+            }
+
             let mut encoder = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -574,32 +736,38 @@ mod worker {
                 height,
                 &rgba,
             ) else {
+                // A fragmented upload may already have staged pixels before allocation fails.
+                self.belt.finish();
+                let _ = self.queue.submit([encoder.finish()]);
+                self.belt.recall();
+
+                self.publish(Work::Error {
+                    handle,
+                    error: image::Error::OutOfMemory,
+                });
                 return;
             };
-
-            let output = self.output.clone();
-            let shell = self.shell.clone();
 
             self.belt.finish();
             let submission = self.queue.submit([encoder.finish()]);
             self.belt.recall();
 
-            let bind_group = atlas.bind_group().clone();
-
-            self.queue.on_submitted_work_done(move || {
-                let _ = output.send(Work::Upload {
-                    handle,
-                    entry,
-                    bind_group,
-                });
-
-                callback(&shell);
-            });
-
-            let _ = self.device.poll(wgpu::PollType::Wait {
+            let work = match self.device.poll(wgpu::PollType::Wait {
                 submission_index: Some(submission),
                 timeout: None,
-            });
+            }) {
+                Ok(_) => Work::Upload {
+                    handle,
+                    entry,
+                    bind_group: atlas.bind_group().clone(),
+                },
+                Err(error) => Work::Error {
+                    handle,
+                    error: image::Error::Invalid(Arc::new(error)),
+                },
+            };
+
+            self.publish(work);
         }
     }
 }
